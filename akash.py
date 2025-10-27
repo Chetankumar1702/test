@@ -1,14 +1,9 @@
-line 1
+from flask import Flask # type: ignore
+app = Flask(__name__)
 
-line 2
+@app.route('/')
+def hello_world():
+   return 'Hello World'
 
-line 3
-
-line 4
-
-line 5
-
-line 6
-
-line 7
-
+if __name__ == '__main__':
+   app.run()(debug=True)
