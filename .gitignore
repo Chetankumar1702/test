@@ -1,0 +1,9 @@
+fake_contacts.csv
+exported_contacts.csv
+__pycache__/
+*.pyc
+instance/
+.env
+*.sqlite3
+.vscode/
+.DS_Storefake_contacts.csv
