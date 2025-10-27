@@ -7,3 +7,4 @@ instance/
 *.sqlite3
 .vscode/
 .DS_Storefake_contacts.csv
+fake_contacts.csv
