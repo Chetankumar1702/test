@@ -6,5 +6,6 @@ instance/
 .env
 *.sqlite3
 .vscode/
-.DS_Storefake_contacts.csv
-venv
+.DS_Store
+venv/
+*.csv
