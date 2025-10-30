@@ -213,6 +213,54 @@ def register():
             return redirect(url_for('register'))
     return render_template('register.html')
 
+@app.route('/api/register', methods=['POST'])
+def api_register():
+    data = request.get_json()
+
+    email = data.get('email', '').strip().lower()
+    password = data.get('password')
+    fullname = data.get('fullname')
+    mobile_no = data.get('mobile_no')
+    address = data.get('address')
+
+    if not all([email, password, fullname, mobile_no, address]):
+        return jsonify({"status": "error", "message": "All fields are required"}), 400
+
+    if Users.query.filter_by(email=email).first():
+        return jsonify({"status": "error", "message": "User already exists"}), 409
+
+    role = Role.query.filter_by(role_name='employee').first()
+    if not role:
+        return jsonify({"status": "error", "message": "Default role 'employee' not found"}), 500
+
+    otp = generate_otp()
+
+    try:
+        new_user = Users(
+            email=email,
+            fullname=fullname,
+            mobile_no=mobile_no,
+            address=address,
+            is_active=False   # Not active until OTP verified
+        )
+        new_user.set_password(password)
+        db.session.add(new_user)
+        db.session.flush()
+
+        db.session.add(UserRole(user_id=new_user.id, role_id=role.id))
+        db.session.commit()
+
+        send_email_with_otp(email=email, otp=otp, fullname=fullname)
+
+        # Store OTP temporarily in server session
+        session['registration_otp'] = {"user_id": new_user.id, "otp": otp}
+
+        return jsonify({"status": "success", "message": "OTP sent to email"}), 201
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"status": "error", "message": f"Failed to register: {str(e)}"}), 500
+
 @app.route('/verify-otp', methods=['GET', 'POST'])
 def verify_otp():
     reg_data = session.get('registration_data')
@@ -237,6 +285,30 @@ def verify_otp():
         flash("Email verified successfully. Please review the consent form.", "success")
         return redirect(url_for('consent'))
     return render_template('verify_otp.html')
+
+@app.route('/api/verify-otp', methods=['POST'])
+def api_verify_otp():
+    reg_data = session.get('registration_otp')
+    if not reg_data:
+        return jsonify({"status": "error", "message": "Session expired"}), 440
+    
+    data = request.get_json()
+    entered_otp = data.get('otp')
+
+    if str(entered_otp) != str(reg_data['otp']):
+        return jsonify({"status": "error", "message": "Invalid OTP"}), 400
+
+    user = Users.query.get(reg_data['user_id'])
+    if not user:
+        return jsonify({"status": "error", "message": "User not found"}), 404
+
+    user.is_active = True
+    db.session.commit()
+
+    # OTP Verified — clear session
+    session.pop('registration_otp', None)
+
+    return jsonify({"status": "success", "message": "OTP verified successfully"}), 200
 
 # ----------------------------------------------------------------
 # Consent routes
