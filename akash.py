@@ -66,17 +66,22 @@ def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         token = None
+
         if 'Authorization' in request.headers:
-            token = request.headers['Authorization'].replace('Bearer ', '')
+            token = request.headers['Authorization'].split(" ")[1]
 
         if not token:
-            return jsonify({'error': 'Token missing'}), 401
+            return jsonify({'message': 'Token missing'}), 401
 
         try:
-            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
-            current_user = Users.query.filter_by(id=data['id']).first()
-        except Exception:
-            return jsonify({'error': 'Invalid or expired token'}), 401
+            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
+            current_user = Users.query.get(data['user_id'])
+
+            if not current_user:
+                return jsonify({'message': 'Invalid or expired token'}), 401
+
+        except Exception as e:
+            return jsonify({'message': 'Token is invalid or expired'}), 401
 
         return f(current_user, *args, **kwargs)
 
@@ -461,6 +466,13 @@ def login():
         return redirect(url_for('dashboard'))
     return render_template('login.html')
 
+@app.after_request
+def add_cors_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization'
+    response.headers['Access-Control-Allow-Methods'] = 'GET,POST,PUT,DELETE,OPTIONS'
+    return response
+
 @app.route('/api/login', methods=['POST'])
 def api_login():
     data = request.get_json()
@@ -613,58 +625,25 @@ def dashboard():
             grievances_count=grievances_count
         )
 
-@app.route('/api/dashboard', methods=['GET'])
+@app.route('/api/dashboard/', methods=['GET'])
 @token_required
 def api_dashboard(current_user):
     return jsonify({
         "user": {
             "fullname": current_user.fullname,
             "email": current_user.email,
-            "role": current_user.primary_role
+            "primary_role": current_user.roles[0].role.role_name if current_user.roles else "user",
         },
         "stats": {
-            "active_consents": 3,
-            "grievances_count": 1,
-            "unread_notifications": 2,
-            "total_users": 10 if current_user.primary_role == 'admin' else None,
-            "total_consents": 22 if current_user.primary_role == 'admin' else None,
+            "active_consents": Consent.query.filter_by(user_id=current_user.id, status="granted").count(),
+            "grievances_count": Grievance.query.filter_by(user_id=current_user.id).count(),
+            "unread_notifications": Notification.query.filter_by(user_id=current_user.id, is_read=False).count(),
+            # ↓ only for admin
+            "total_users": Users.query.count() if any(ur.role.role_name == 'admin' for ur in current_user.roles) else None,
+            "total_consents": Consent.query.count() if any(ur.role.role_name == 'admin' for ur in current_user.roles) else None,
+            "total_feedbacks": Contacts.query.count() if any(ur.role.role_name == 'admin' for ur in current_user.roles) else None,
+            "total_grievances": Grievance.query.count() if any(ur.role.role_name == 'admin' for ur in current_user.roles) else None,
         }
-    }), 200
-
-@app.route('/api/dashboard/summary', methods=['GET'])
-@token_required
-def api_dashboard_summary(current_user):
-    unread_notifications = Notification.query.filter_by(user_id=current_user.id, status='unread').count()
-    active_consents = Consent.query.filter_by(user_id=current_user.id, status='granted').count()
-    grievances_count = Grievance.query.filter_by(user_id=current_user.id).count()
-
-    if not has_valid_consent(current_user):
-        return jsonify({
-            'message': 'Consent required',
-            'consent_required': True
-        }), 403
-
-    return jsonify({
-        'message': f"Welcome {current_user.fullname}",
-        'email': current_user.email,
-        'roles': [ur.role.role_name for ur in current_user.roles] if current_user.roles else [],
-        'unread_notifications': unread_notifications,
-        'active_consents': active_consents,
-        'grievances_count': grievances_count
-    }), 200
-
-@app.route('/api/dashboard/admin-summary', methods=['GET'])
-@token_required
-def api_admin_dashboard_summary(current_user):
-    if not any(ur.role.role_name == 'admin' for ur in current_user.roles):
-        return jsonify({'error': 'Admins only'}), 403
-
-    return jsonify({
-        'total_users': Users.query.count(),
-        'total_consents': Consent.query.count(),
-        'total_feedbacks': Contacts.query.count(),
-        'total_grievances': Grievance.query.count(),
-        'total_external_consents': ExternalConsent.query.count()
     }), 200
 
 @app.route('/profile')
@@ -751,7 +730,7 @@ def api_change_password(current_user):
 from flask import Response, jsonify, request # type: ignore
 from flask_cors import CORS  # type: ignore
 
-CORS(app)
+CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
 
 @app.route('/consentform/<int:form_id>.js')
 def consentform_js(form_id):
