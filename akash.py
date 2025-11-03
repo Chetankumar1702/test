@@ -177,6 +177,48 @@ def contacts():
         return redirect(url_for('contacts'))
     return render_template('contacts.html')
 
+@app.route('/api/contacts', methods=['POST'])
+def api_add_contact():
+    data = request.get_json()
+
+    if not data:
+        return jsonify({"status": "error", "message": "No input data provided"}), 400
+
+    fullname = data.get('fullname', '').strip()
+    email = data.get('email', '').strip().lower()
+    mobile_no = data.get('mobile_no', '').strip()
+    address = data.get('address', '').strip()
+    message = data.get('message', '').strip()
+    rating = data.get('rating')
+
+    if not fullname or not email or not mobile_no or not message:
+        return jsonify({"status": "error", "message": "fullname, email, mobile_no & message are required."}), 400
+
+    # Validate rating
+    if rating is not None:
+        try:
+            rating = int(rating)
+            if rating < 1 or rating > 5:
+                return jsonify({"status": "error", "message": "Rating must be between 1 and 5."}), 400
+        except ValueError:
+            return jsonify({"status": "error", "message": "Invalid rating value."}), 400
+
+    contact = Contacts(
+        fullname=fullname,
+        email=email,
+        mobile_no=mobile_no,
+        address=address,
+        message=message,
+        rating=rating,
+        sent_on=datetime.utcnow(),
+        read_status='Unread'
+    )
+
+    db.session.add(contact)
+    db.session.commit()
+
+    return jsonify({"status": "success", "message": "Your message has been sent successfully."}), 201
+
 # ----------------------------------------------------------------
 # Registration
 # ----------------------------------------------------------------
