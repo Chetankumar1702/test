@@ -54,11 +54,12 @@ def load_user(user_id):
 # ----------------------------------------------------------------
 # JWT helper
 # ----------------------------------------------------------------
-def generate_token(user):
+def generate_token(user, remember=False):
+    expiry = 7 if remember else 1  # Days
     payload = {
         'id': user.id,
         'email': user.email,
-        'exp': datetime.utcnow() + timedelta(hours=1)
+        'exp': datetime.utcnow() + timedelta(days=expiry)
     }
     return jwt.encode(payload, app.config['SECRET_KEY'], algorithm='HS256')
 
@@ -67,24 +68,27 @@ def token_required(f):
     def decorated(*args, **kwargs):
         token = None
 
-        if 'Authorization' in request.headers:
-            token = request.headers['Authorization'].split(" ")[1]
+        auth_header = request.headers.get('Authorization')
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header.split(" ")[1]
 
         if not token:
             return jsonify({'message': 'Token missing'}), 401
 
         try:
             data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
-            current_user = Users.query.get(data['user_id'])
+
+            current_user = Users.query.get(data['id'])
 
             if not current_user:
                 return jsonify({'message': 'Invalid or expired token'}), 401
 
-        except Exception as e:
-            return jsonify({'message': 'Token is invalid or expired'}), 401
+        except jwt.ExpiredSignatureError:
+            return jsonify({'message': 'Token expired, please login again'}), 401
+        except Exception:
+            return jsonify({'message': 'Token is invalid'}), 401
 
         return f(current_user, *args, **kwargs)
-
     return decorated
 
 # ----------------------------------------------------------------
@@ -455,7 +459,7 @@ def login():
         db.session.commit()
 
         login_user(user, remember=remember)
-        session['jwt_token'] = token
+        session['token'] = token
         print(token)
 
         if not has_valid_consent(user):
@@ -497,26 +501,30 @@ def api_login():
             'message': 'Your account is blocked. Please contact admin (akash581999@gmail.com).'
         }), 403
 
-    token = generate_token(user)
-    print(token)
+    token = generate_token(user)  # JWT Token
+    print(token)                   # ✅ Debug only, remove in production
+
     session_token = secrets.token_urlsafe(32)
 
     user.session_token = session_token
     user.last_login = datetime.utcnow()
     db.session.commit()
 
-    response = {
+    data = {
         'message': f"Login successful, welcome back {user.fullname or user.email}!",
+        'token': token,   # ✅ clean key name for frontend
         'user': {
             'user_id': user.id,
             'email': user.email,
             'fullname': user.fullname,
             'roles': [ur.role.role_name for ur in user.roles] if user.roles else [],
-            'jwt_token': token,
             'session_token': session_token
         }
     }
-    return jsonify(response), 200
+
+    response = jsonify(data)
+    response.headers['Content-Type'] = 'application/json'  # ✅ Important
+    return response, 200
 
 @app.route('/logout')
 @login_required
@@ -625,7 +633,7 @@ def dashboard():
             grievances_count=grievances_count
         )
 
-@app.route('/api/dashboard/', methods=['GET'])
+@app.route('/api/dashboard', methods=['GET'])
 @token_required
 def api_dashboard(current_user):
     return jsonify({
@@ -637,7 +645,7 @@ def api_dashboard(current_user):
         "stats": {
             "active_consents": Consent.query.filter_by(user_id=current_user.id, status="granted").count(),
             "grievances_count": Grievance.query.filter_by(user_id=current_user.id).count(),
-            "unread_notifications": Notification.query.filter_by(user_id=current_user.id, is_read=False).count(),
+            "unread_notifications": Notification.query.filter_by(user_id=current_user.id).count(),
             # ↓ only for admin
             "total_users": Users.query.count() if any(ur.role.role_name == 'admin' for ur in current_user.roles) else None,
             "total_consents": Consent.query.count() if any(ur.role.role_name == 'admin' for ur in current_user.roles) else None,
