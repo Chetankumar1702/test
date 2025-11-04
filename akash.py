@@ -692,7 +692,7 @@ def api_dashboard(current_user):
             "total_users": Users.query.count() if any(ur.role.role_name == 'admin' for ur in current_user.roles) else None,
             "total_consents": Consent.query.count() if any(ur.role.role_name == 'admin' for ur in current_user.roles) else None,
             "total_feedbacks": Contacts.query.count() if any(ur.role.role_name == 'admin' for ur in current_user.roles) else None,
-            "total_grievances": Grievance.query.count() if any(ur.role.role_name == 'admin' for ur in current_user.roles) else None,
+            "total_fiduciaries": DataFiduciary.query.count() if any(ur.role.role_name == 'admin' for ur in current_user.roles) else None,
         }
     }), 200
 
@@ -1084,18 +1084,15 @@ def showallfeedbacks():
 @app.route('/api/showallfeedbacks', methods=['GET'])
 @token_required
 def api_show_all_feedbacks(current_user):
-    if not current_user.role or current_user.role.name.lower() != 'admin':
+    if not any(ur.role.role_name == 'admin' for ur in current_user.roles):
         return jsonify({'message': 'Forbidden – Admins only'}), 403
 
-    # Get page and per_page from query parameters
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 10, type=int)
 
-    # Paginate query
-    pagination = Contacts.query.order_by(Contacts.id.desc()).paginate(page=page, per_page=per_page)
+    pagination = Contacts.query.order_by(Contacts.id.desc()).paginate(page=page, per_page=per_page, error_out=False)
     contacts = pagination.items
 
-    # Build contact data
     contact_data = [
         {
             'id': contact.id,
@@ -1111,8 +1108,8 @@ def api_show_all_feedbacks(current_user):
         for contact in contacts
     ]
 
-    # Return paginated response with metadata
     return jsonify({
+        'status': 'success',
         'contacts': contact_data,
         'pagination': {
             'current_page': pagination.page,
@@ -1277,6 +1274,59 @@ def delete_fiduciary(id):
     db.session.commit()
     flash('Data Fiduciary deleted successfully.', 'success')
     return redirect(url_for('admin_fiduciaries'))
+
+# ✅ API: Get all Data Fiduciaries
+@app.route('/api/showallfiduciaries', methods=['GET'])
+@token_required
+def api_show_all_fiduciaries(current_user):
+    # Allow only Admin
+    if not any(ur.role.role_name == 'admin' for ur in current_user.roles):
+        return jsonify({'message': 'Forbidden – Admins only'}), 403
+
+    fiduciaries = DataFiduciary.query.order_by(DataFiduciary.created_at.desc()).all()
+
+    data = [
+        {
+            'id': fid.id,
+            'name': fid.name,
+            'contact_email': fid.contact_email,
+            'created_at': fid.created_at.strftime('%Y-%m-%d %H:%M:%S') if fid.created_at else None
+        }
+        for fid in fiduciaries
+    ]
+
+    return jsonify({'status': 'success', 'fiduciaries': data}), 200
+
+@app.route('/api/fiduciaries/add', methods=['POST'])
+@token_required
+def api_add_fiduciary(current_user):
+    if not any(ur.role.role_name == 'admin' for ur in current_user.roles):
+        return jsonify({'message': 'Admins only'}), 403
+
+    data = request.get_json()
+    name = data.get('name')
+    email = data.get('contact_email')
+
+    if not name or not email:
+        return jsonify({'message': 'Name & email are required.'}), 400
+
+    new_fid = DataFiduciary(name=name.strip(), contact_email=email.strip())
+    db.session.add(new_fid)
+    db.session.commit()
+
+    return jsonify({'message': 'Data Fiduciary added successfully!'}), 201
+
+@app.route('/api/fiduciaries/delete/<string:id>', methods=['DELETE'])
+@token_required
+def api_delete_fiduciary(current_user, id):
+    if not any(ur.role.role_name == 'admin' for ur in current_user.roles):
+        return jsonify({'message': 'Admins only'}), 403
+
+    fid = DataFiduciary.query.get_or_404(id)
+    db.session.delete(fid)
+    db.session.commit()
+
+    return jsonify({'message': 'Fiduciary deleted successfully!'}), 200
 
 # ----------------------------
 # 3️⃣ PURPOSE MANAGEMENT
