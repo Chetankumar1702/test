@@ -112,6 +112,30 @@ def send_notification(user_id, message, type="consent_update"):
     )
     db.session.add(notif)
     db.session.commit()
+
+SECRET_KEY = app.config['SECRET_KEY']
+
+def cookie_token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = request.cookies.get('access_token')  # ✅ Token stored in cookie
+        if not token:
+            return jsonify({'message': 'Authentication token missing. Please log in again.'}), 401
+
+        try:
+            data = jwt.decode(token, SECRET_KEY, algorithms=['HS256'])
+            user = Users.query.get(data['user_id'])
+
+            if not user or user.session_token is None:
+                return jsonify({'message': 'Session expired. Please log in again.'}), 401
+
+        except jwt.ExpiredSignatureError:
+            return jsonify({'message': 'Session expired. Please log in again.'}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({'message': 'Invalid authentication token.'}), 401
+
+        return f(user, *args, **kwargs)
+    return decorated
 # ----------------------------------------------------------------
 # Ensure all tables are created
 # ----------------------------------------------------------------
@@ -519,6 +543,9 @@ def add_cors_headers(response):
     response.headers['Access-Control-Allow-Methods'] = 'GET,POST,PUT,DELETE,OPTIONS'
     return response
 
+from flask import jsonify, make_response
+import datetime, secrets, jwt # type: ignore
+
 @app.route('/api/login', methods=['POST'])
 def api_login():
     data = request.get_json()
@@ -543,29 +570,42 @@ def api_login():
             'message': 'Your account is blocked. Please contact admin (akash581999@gmail.com).'
         }), 403
 
-    token = generate_token(user)  # JWT Token
-    print(token)                   # ✅ Debug only, remove in production
+    # ✅ JWT Token
+    payload = {
+        "user_id": user.id,
+        "email": user.email,
+        "roles": [ur.role.role_name for ur in user.roles] if user.roles else [],
+        "exp": datetime.datetime.utcnow() + datetime.timedelta(days=7 if remember else 1),
+        "iat": datetime.datetime.utcnow()
+    }
 
+    token = jwt.encode(payload, app.config['SECRET_KEY'], algorithm="HS256")
+
+    # ✅ Optional session token for DB tracking (good practice)
     session_token = secrets.token_urlsafe(32)
-
     user.session_token = session_token
-    user.last_login = datetime.utcnow()
+    user.last_login = datetime.datetime.utcnow()
     db.session.commit()
 
-    data = {
-        'message': f"Login successful, welcome back {user.fullname or user.email}!",
-        'token': token,   # ✅ clean key name for frontend
-        'user': {
+    response = make_response(jsonify({
+        "message": f"Login successful, welcome back {user.fullname or user.email}!",
+        "user": {
             'user_id': user.id,
             'email': user.email,
             'fullname': user.fullname,
-            'roles': [ur.role.role_name for ur in user.roles] if user.roles else [],
-            'session_token': session_token
+            'roles': payload["roles"]
         }
-    }
+    }))
 
-    response = jsonify(data)
-    response.headers['Content-Type'] = 'application/json'  # ✅ Important
+    # ✅ HttpOnly Secure Cookie (Frontend CANNOT see token)
+    response.set_cookie(
+        "access_token",
+        token,
+        httponly=True,
+        secure=False,         # ❗ requires HTTPS (use False only in localhost)
+        samesite="None",   # Prevent CSRF; use "None" for cross-domain
+        max_age=7 * 24 * 60 * 60 if remember else 24 * 60 * 60
+    )
     return response, 200
 
 @app.route('/logout')
@@ -578,14 +618,17 @@ def logout():
     return redirect(url_for('login'))
 
 @app.route('/api/logout', methods=['POST'])
-@token_required
-def api_logout(current_user):
-    if not current_user.session_token:
-        return jsonify({'message': 'Token not found, Please login again.'}), 400
-
-    current_user.session_token = None
-    db.session.commit()
-    return jsonify({'message': 'You have successfully been logged out.'}), 200
+def api_logout():
+    response = make_response(jsonify({'message': 'Logged out successfully'}))
+    response.set_cookie(
+        "access_token",
+        "",
+        expires=0,
+        httponly=True,
+        secure=True,
+        samesite="Strict"
+    )
+    return response, 200
 
 @app.route('/resetpassword', methods=['GET', 'POST'])
 def resetpassword():
@@ -676,8 +719,10 @@ def dashboard():
         )
 
 @app.route('/api/dashboard', methods=['GET'])
-@token_required
+@cookie_token_required
 def api_dashboard(current_user):
+    is_admin = any(ur.role.role_name == 'admin' for ur in current_user.roles)
+
     return jsonify({
         "user": {
             "fullname": current_user.fullname,
@@ -688,11 +733,10 @@ def api_dashboard(current_user):
             "active_consents": Consent.query.filter_by(user_id=current_user.id, status="granted").count(),
             "grievances_count": Grievance.query.filter_by(user_id=current_user.id).count(),
             "unread_notifications": Notification.query.filter_by(user_id=current_user.id).count(),
-            # ↓ only for admin
-            "total_users": Users.query.count() if any(ur.role.role_name == 'admin' for ur in current_user.roles) else None,
-            "total_consents": Consent.query.count() if any(ur.role.role_name == 'admin' for ur in current_user.roles) else None,
-            "total_feedbacks": Contacts.query.count() if any(ur.role.role_name == 'admin' for ur in current_user.roles) else None,
-            "total_fiduciaries": DataFiduciary.query.count() if any(ur.role.role_name == 'admin' for ur in current_user.roles) else None,
+            "total_users": Users.query.count() if is_admin else None,
+            "total_consents": Consent.query.count() if is_admin else None,
+            "total_feedbacks": Contacts.query.count() if is_admin else None,
+            "total_fiduciaries": DataFiduciary.query.count() if is_admin else None,
         }
     }), 200
 
@@ -780,7 +824,8 @@ def api_change_password(current_user):
 from flask import Response, jsonify, request # type: ignore
 from flask_cors import CORS  # type: ignore
 
-CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
+CORS(app, supports_credentials=True, origins=["http://localhost:3000", "http://127.0.0.1:3000"])
+
 
 @app.route('/consentform/<int:form_id>.js')
 def consentform_js(form_id):

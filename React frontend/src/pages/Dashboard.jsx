@@ -10,26 +10,31 @@ export default function Dashboard() {
     const [stats, setStats] = useState({});
 
     useEffect(() => {
-        const token = localStorage.getItem("token");
-        if (!token) return navigate("/login");
-
         axios
             .get("http://127.0.0.1:5000/api/dashboard", {
-                headers: { Authorization: `Bearer ${token}` },
+                withCredentials: true,   // ✅ send cookie to backend
             })
             .then((res) => {
                 setUser(res.data.user);
                 setStats(res.data.stats);
             })
             .catch((err) => {
-                if (err.response?.status === 401 || err.response?.status === 403) {
-                    localStorage.removeItem("token");
+                if (err.response?.status === 401) {
                     return navigate("/login");
                 }
                 setError(err.response?.data?.message || err.message);
             })
             .finally(() => setLoading(false));
     }, [navigate]);
+
+    const handleLogout = async () => {
+        try {
+            await axios.post("http://127.0.0.1:5000/api/logout", {}, { withCredentials: true });
+        } catch (err) {
+            console.error("Logout failed", err);
+        }
+        navigate("/login");
+    };
 
     if (loading) return <Center>Loading dashboard…</Center>;
     if (error) return <Alert>{error}</Alert>;
@@ -38,7 +43,7 @@ export default function Dashboard() {
 
     return (
         <div>
-            {/* Top Navbar */}
+            {/* Nav */}
             <nav className="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm">
                 <div className="container-fluid">
                     <span className="navbar-brand">DPCMS</span>
@@ -67,10 +72,7 @@ export default function Dashboard() {
 
                         <button
                             className="btn btn-outline-danger btn-sm"
-                            onClick={() => {
-                                localStorage.removeItem("token");
-                                navigate("/login");
-                            }}
+                            onClick={handleLogout} // ✅ logout hits backend
                         >
                             Logout
                         </button>
@@ -78,16 +80,14 @@ export default function Dashboard() {
                 </div>
             </nav>
 
-            {/* PAGE CONTENT */}
+            {/* Page Content */}
             <div className="container mt-4 pt-3">
-                {/* User Info */}
                 <div className="text-center">
                     <h2>Welcome, {user.fullname}</h2>
                     <p className="text-muted">{user.email}</p>
                     <hr />
                 </div>
 
-                {/* Admin or User Dashboard Section */}
                 {isAdmin ? <AdminSection stats={stats} /> : <UserSection role={user.primary_role} />}
             </div>
         </div>
@@ -127,7 +127,7 @@ function AdminSection({ stats }) {
                                 <h5>{title}</h5>
                                 <h2>{value || 0}</h2>
                                 <a href={link} className="btn btn-light btn-sm mt-2">
-                                    Open
+                                    View
                                 </a>
                             </div>
                         </div>

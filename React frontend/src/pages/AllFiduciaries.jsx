@@ -14,7 +14,7 @@ export default function AllFiduciaries() {
 
     useEffect(() => {
         if (!token) return navigate("/login");
-        loadFiduciaries();
+        loadFiduciaries();// eslint-disable-next-line 
     }, []);
 
     const loadFiduciaries = () => {

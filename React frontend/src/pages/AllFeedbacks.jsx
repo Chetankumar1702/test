@@ -32,9 +32,8 @@ export default function AllFeedbacks() {
             setLoading(false);
         }
     };
-
     useEffect(() => {
-        fetchContacts(1);
+        fetchContacts(1);// eslint-disable-next-line 
     }, []);
 
     const handlePageChange = (page) => {

@@ -14,19 +14,22 @@ const Login = () => {
         e.preventDefault();
 
         try {
-            const res = await axios.post("http://127.0.0.1:5000/api/login", {
-                email,
-                password,
-                remember,
-            });
+            const res = await axios.post(
+                "http://127.0.0.1:5000/api/login",
+                { email, password, remember },
+                { withCredentials: true } // ✅ send & store cookie
+            );
 
-            const token = res.data.token;
-            if (token) {
-                localStorage.setItem("token", token);
-            }
+            // ✅ Do NOT store token anymore
+            // Browser stores HttpOnly Cookie securely
 
             setAlert({ type: "success", message: res.data.message });
+
+            // Optional: store user object (not token)
+            sessionStorage.setItem("user", JSON.stringify(res.data.user));
+
             navigate("/dashboard");
+
         } catch (err) {
             const msg = err.response?.data?.message || "Login failed!";
             setAlert({ type: "danger", message: msg });
